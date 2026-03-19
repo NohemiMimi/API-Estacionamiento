@@ -1,6 +1,8 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from pymongo import MongoClient
+import uuid
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -13,6 +15,9 @@ db = cliente["Estacionamiento"]
 
 # colección
 usuarios = db["usuarios"]
+
+# nueva colección
+entrada = db["entrada"]
 
 # índice único para correo
 usuarios.create_index("correo", unique=True)
@@ -105,7 +110,97 @@ def login():
             "success": False,
             "mensaje": "Usuario o contraseña incorrectos"
         })
+@app.route("/crear-qr", methods=["POST"])
+def crear_qr():
 
+    datos = request.json
+    placa = datos.get("placa", "N/A")
+
+    token = str(uuid.uuid4())
+
+    nuevo = {
+        "qrToken": token,
+        "placa": placa,
+        "horaEntrada": datetime.now(),
+        "horaSalida": None,
+        "estado": "dentro",
+        "tipo": "app"
+    }
+
+    entrada.insert_one(nuevo)
+
+    return jsonify({
+        "success": True,
+        "qrToken": token,
+        "horaEntrada": str(nuevo["horaEntrada"])
+    })
+
+@app.route("/salida", methods=["POST"])
+def salida():
+
+    datos = request.json
+    token = datos.get("qrToken")
+
+    registro = entrada.find_one({"qrToken": token})
+
+    if not registro:
+        return jsonify({
+            "success": False,
+            "mensaje": "No encontrado"
+        })
+
+    hora_salida = datetime.now()
+    hora_entrada = registro["horaEntrada"]
+
+    # ⏱️ calcular tiempo en minutos
+    tiempo = (hora_salida - hora_entrada).total_seconds() / 60
+
+    # 💰 tarifa (puedes cambiarla)
+    precio = round(tiempo * 0.5, 2)
+
+    entrada.update_one(
+        {"_id": registro["_id"]},
+        {"$set": {
+            "horaSalida": hora_salida,
+            "estado": "salida",
+            "precio": precio
+        }}
+    )
+
+    return jsonify({
+        "success": True,
+        "tiempo": tiempo,
+        "precio": precio
+    })
+
+
+@app.route("/validar-qr", methods=["POST"])
+def validar_qr():
+
+    datos = request.json
+    token = datos.get("qrToken")
+
+    registro = entrada.find_one({"qrToken": token})
+
+    if not registro:
+        return jsonify({
+            "success": False,
+            "mensaje": "QR no válido"
+        })
+
+    registro["_id"] = str(registro["_id"])
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "id": registro["_id"],
+            "placa": registro.get("placa", "N/A"),
+            "horaEntrada": str(registro.get("horaEntrada")),
+            "horaSalida": str(registro.get("horaSalida")) if registro.get("horaSalida") else None,
+            "estado": registro.get("estado")
+        }
+    })
+    
 # =========================
 # RUN
 # =========================
